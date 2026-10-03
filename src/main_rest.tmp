@@ -1,0 +1,289 @@
+// Loadout Launcher — one program instead of SmartSteamEmu launcher + console patcher.
+#include <windows.h>
+#include <dwmapi.h>
+#include <uxtheme.h>
+#include <shellapi.h>
+#include <d3d11.h>
+#include <string>
+#include <vector>
+#include <map>
+#include <cstring>
+#include <cmath>
+#include "imgui.h"
+#include "imgui_impl_win32.h"
+#include "imgui_impl_dx11.h"
+#include "game.h"
+#include "data.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_JPEG
+#define STBI_ONLY_PNG
+#include "stb_image.h"
+#ifdef LL_TESTHOOK
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+#endif
+
+// ------------------------------------------------------------------ D3D
+static ID3D11Device* g_dev = nullptr;
+static ID3D11DeviceContext* g_ctx = nullptr;
+static IDXGISwapChain* g_swap = nullptr;
+static ID3D11RenderTargetView* g_rtv = nullptr;
+static UINT g_resizeW = 0, g_resizeH = 0;
+static bool g_occluded = false;
+static float S = 1.0f;          // DPI scale
+static float g_newS = 0.0f;     // pending DPI change
+
+static void CreateRT()
+{
+    ID3D11Texture2D* bb = nullptr;
+    g_swap->GetBuffer(0, IID_PPV_ARGS(&bb));
+    g_dev->CreateRenderTargetView(bb, nullptr, &g_rtv);
+    bb->Release();
+}
+static void CleanupRT() { if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; } }
+
+static bool CreateDevice(HWND hwnd)
+{
+    DXGI_SWAP_CHAIN_DESC sd{};
+    sd.BufferCount = 2;
+    sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow = hwnd;
+    sd.SampleDesc.Count = 1;
+    sd.Windowed = TRUE;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+    D3D_FEATURE_LEVEL fl;
+    const D3D_FEATURE_LEVEL fls[2] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
+    HRESULT r = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, fls, 2, D3D11_SDK_VERSION, &sd, &g_swap, &g_dev, &fl, &g_ctx);
+    if (r == DXGI_ERROR_UNSUPPORTED)
+        r = D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, fls, 2, D3D11_SDK_VERSION, &sd, &g_swap, &g_dev, &fl, &g_ctx);
+    if (r != S_OK) return false;
+    CreateRT();
+    return true;
+}
+static void CleanupDevice()
+{
+    CleanupRT();
+    if (g_swap) g_swap->Release();
+    if (g_ctx) g_ctx->Release();
+    if (g_dev) g_dev->Release();
+}
+
+#ifdef LL_TESTHOOK
+// test hook: commands from LoadoutLauncher.test (click x y / shot) — debug builds only
+static std::vector<std::string> g_testCmds;
+static bool g_wantShot = false;
+static void TestPoll()
+{
+    static double last = 0;
+    if (ImGui::GetTime() - last < 0.5) return;
+    last = ImGui::GetTime();
+    std::wstring p = g_exeDir + L"\\LoadoutLauncher.test";
+    FILE* f = _wfopen(p.c_str(), L"r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) g_testCmds.push_back(line);
+    fclose(f);
+    DeleteFileW(p.c_str());
+}
+static int g_testWait = 0;
+static float g_clickX, g_clickY; static int g_clickPhase = 0;
+static void TestStep()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    if (g_clickPhase) {
+        io.AddMousePosEvent(g_clickX, g_clickY);
+        if (g_clickPhase == 3) io.AddMouseButtonEvent(0, true);
+        if (g_clickPhase == 5) { io.AddMouseButtonEvent(0, false); g_clickPhase = 0; } else g_clickPhase++;
+    }
+    if (g_testWait > 0) { g_testWait--; return; }
+    if (g_testCmds.empty()) return;
+    std::string c = g_testCmds.front(); g_testCmds.erase(g_testCmds.begin());
+    float x, y; int n;
+    if (sscanf(c.c_str(), "click %f %f", &x, &y) == 2) {
+        g_clickX = x; g_clickY = y; g_clickPhase = 1; g_testWait = 8;
+    } else if (sscanf(c.c_str(), "move %f %f", &x, &y) == 2) { io.AddMousePosEvent(x, y); g_testWait = 5; }
+    else if (sscanf(c.c_str(), "wheel %d", &n) == 1) { io.AddMouseWheelEvent(0, (float)n); g_testWait = 5; }
+    else if (c.rfind("shot", 0) == 0) { g_wantShot = true; g_testWait = 3; }
+    else if (sscanf(c.c_str(), "wait %d", &n) == 1) g_testWait = n;
+    else if (c.rfind("quit", 0) == 0) PostQuitMessage(0);
+}
+static void TestShot()
+{
+    if (!g_wantShot) return;
+    g_wantShot = false;
+    ID3D11Texture2D* bb = nullptr; g_swap->GetBuffer(0, IID_PPV_ARGS(&bb));
+    D3D11_TEXTURE2D_DESC d; bb->GetDesc(&d);
+    d.Usage = D3D11_USAGE_STAGING; d.BindFlags = 0; d.CPUAccessFlags = D3D11_CPU_ACCESS_READ; d.MiscFlags = 0;
+    ID3D11Texture2D* st = nullptr; g_dev->CreateTexture2D(&d, nullptr, &st);
+    g_ctx->CopyResource(st, bb);
+    D3D11_MAPPED_SUBRESOURCE m;
+    if (SUCCEEDED(g_ctx->Map(st, 0, D3D11_MAP_READ, 0, &m))) {
+        std::vector<unsigned char> px(d.Width * d.Height * 4);
+        for (UINT y = 0; y < d.Height; y++) memcpy(&px[y * d.Width * 4], (char*)m.pData + y * m.RowPitch, d.Width * 4);
+        for (size_t i = 3; i < px.size(); i += 4) px[i] = 255;
+        g_ctx->Unmap(st, 0);
+        std::wstring p = g_exeDir + L"\\LoadoutLauncher_shot.png";
+        char pa[MAX_PATH]; WideCharToMultiByte(CP_ACP, 0, p.c_str(), -1, pa, MAX_PATH, nullptr, nullptr);
+        stbi_write_png(pa, d.Width, d.Height, 4, px.data(), d.Width * 4);
+    }
+    st->Release(); bb->Release();
+}
+#endif
+
+// ------------------------------------------------------------------ window
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
+
+static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+    switch (msg) {
+    case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED) return 0;
+        g_resizeW = LOWORD(lParam); g_resizeH = HIWORD(lParam);
+        return 0;
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* mm = (MINMAXINFO*)lParam;
+        mm->ptMinTrackSize.x = (LONG)(900 * S); mm->ptMinTrackSize.y = (LONG)(600 * S);
+        return 0;
+    }
+    case WM_DPICHANGED: {
+        g_newS = HIWORD(wParam) / 96.0f;
+        RECT* r = (RECT*)lParam;
+        SetWindowPos(hWnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
+        return 0;
+    }
+    case WM_APP + 1:
+        BringSelfToFront();
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
+{
+    // single instance
+    HANDLE mtx = CreateMutexW(nullptr, TRUE, L"LoadoutReloadedLauncher_Mutex");
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND other = FindWindowW(L"LoadoutLauncherWnd", nullptr);
+        if (other) { ShowWindow(other, SW_RESTORE); SetForegroundWindow(other); }
+        return 0;
+    }
+
+    wchar_t exe[MAX_PATH]; GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    g_exeDir = exe; g_exeDir = g_exeDir.substr(0, g_exeDir.rfind(L'\\'));
+    g_gameExe = g_exeDir + L"\\Loadout.exe";
+    LogInit();
+    LogF("Loadout Launcher start, folder: %ls", g_exeDir.c_str());
+    SettingsLoad();
+    SettingsSave();
+
+    ImGui_ImplWin32_EnableDpiAwareness();
+    POINT pt; GetCursorPos(&pt);
+    S = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY));
+
+    WNDCLASSEXW wc = {sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInst, LoadIconW(hInst, MAKEINTRESOURCEW(1)), LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"LoadoutLauncherWnd", LoadIconW(hInst, MAKEINTRESOURCEW(1))};
+    RegisterClassExW(&wc);
+    HMONITOR mon = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(mon, &mi);
+    int mw = mi.rcWork.right - mi.rcWork.left, mh = mi.rcWork.bottom - mi.rcWork.top;
+    int ww = (int)(1360 * S), wh = (int)(860 * S);
+    if (ww > mw * 0.92) ww = (int)(mw * 0.92);
+    if (wh > mh * 0.92) wh = (int)(mh * 0.92);
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Loadout Launcher", WS_OVERLAPPEDWINDOW,
+                                mi.rcWork.left + (mw - ww) / 2, mi.rcWork.top + (mh - wh) / 2, ww, wh, nullptr, nullptr, hInst, nullptr);
+    g_mainHwnd = hwnd;
+    {   // no program icon in the title bar (the taskbar keeps it)
+        WTA_OPTIONS o{WTNCA_NODRAWICON | WTNCA_NOSYSMENU, WTNCA_NODRAWICON};
+        SetWindowThemeAttribute(hwnd, WTA_NONCLIENT, &o, sizeof(o));
+    }
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, 20, &dark, sizeof(dark));
+    COLORREF cap = RGB(24, 26, 30);
+    DwmSetWindowAttribute(hwnd, 35, &cap, sizeof(cap));
+
+    if (!CreateDevice(hwnd)) { CleanupDevice(); MessageBoxW(nullptr, L"Direct3D 11 init failed", L"Loadout Launcher", MB_ICONERROR); return 1; }
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    LoadFonts();
+    ApplyStyle();
+    ImGui_ImplWin32_Init(hwnd);
+    ImGui_ImplDX11_Init(g_dev, g_ctx);
+    LoadTextures();
+
+    // first frame before showing, to avoid a white flash
+    const float clear[4] = {17 / 255.f, 18 / 255.f, 21 / 255.f, 1};
+    g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
+    g_ctx->ClearRenderTargetView(g_rtv, clear);
+    g_swap->Present(0, 0);
+    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(hwnd);
+
+    {
+        std::string c; { std::lock_guard<std::mutex> lk(g_setMu); c = g_set.customMap; }
+        strncpy(customBuf, c.c_str(), sizeof(customBuf) - 1);
+    }
+    GameInit();
+
+    bool done = false;
+    while (!done) {
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg); DispatchMessageW(&msg);
+            if (msg.message == WM_QUIT) done = true;
+        }
+        if (done) break;
+#ifdef LL_TESTHOOK
+        if (IsIconic(hwnd)) { std::wstring tp = g_exeDir + L"\\LoadoutLauncher.test"; FILE* tf = _wfopen(tp.c_str(), L"r"); if (tf) { char l[64] = ""; fgets(l, 64, tf); fclose(tf); if (!strncmp(l, "quit", 4)) { DeleteFileW(tp.c_str()); break; } } }
+#endif
+        if (IsIconic(hwnd) || (g_occluded && g_swap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)) { Sleep(50); continue; }
+        g_occluded = false;
+        if (g_resizeW && g_resizeH) {
+            CleanupRT();
+            g_swap->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
+            g_resizeW = g_resizeH = 0;
+            CreateRT();
+        }
+        if (g_newS > 0) { S = g_newS; g_newS = 0; ApplyStyle(); }
+
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+#ifdef LL_TESTHOOK
+        TestPoll(); TestStep();
+#endif
+        ImGui::NewFrame();
+        DrawUI();
+        ImGui::Render();
+        g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
+        g_ctx->ClearRenderTargetView(g_rtv, clear);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+#ifdef LL_TESTHOOK
+        TestShot();
+#endif
+        HRESULT hr = g_swap->Present(1, 0);
+        g_occluded = hr == DXGI_STATUS_OCCLUDED;
+    }
+
+    GameShutdown();
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    CleanupDevice();
+    DestroyWindow(hwnd);
+    if (mtx) CloseHandle(mtx);
+    LogF("exit");
+    return 0;
+}

@@ -1,0 +1,53 @@
+#include <windows.h>
+1 ICON "res/app.ico"
+1 24 "app.manifest"
+SSE_DLL RCDATA "res/SmartSteamEmu.dll.llz"
+SSE_PLG_LOADOUT RCDATA "res/SSELoadout.dll"
+SSE_PLG_FW RCDATA "res/SSEFirewall.dll"
+SSE_PLG_FWINI RCDATA "res/SSEFirewall.ini"
+SSE_PLG_OVINI RCDATA "res/SSEOverlay.ini"
+SSE_PLG_OV RCDATA "res/SSEOverlay_x86.dll.llz"
+SSE_OV_LANG RCDATA "res/Language.ini"
+SSE_OV_MSG RCDATA "res/message.wav"
+SSE_OV_SHOT RCDATA "res/screenshot.wav"
+SSE_AVATAR RCDATA "res/avatar.png"
+ARC_UNCENSORED RCDATA "res/arc_uncensored.bin.llz"
+OVERLAY_DLL RCDATA "out/LoadoutOverlay.dll"
+IMG_icon RCDATA "res/icon.png"
+IMG_shootinggallery RCDATA "res/shootinggallery.jpg"
+IMG_brewery RCDATA "res/brewery.jpg"
+IMG_drillcavern RCDATA "res/drillcavern.jpg"
+IMG_drillcavern_night RCDATA "res/drillcavern_night.jpg"
+IMG_fissure RCDATA "res/fissure.jpg"
+IMG_fissure_night RCDATA "res/fissure_night.jpg"
+IMG_fourpoints RCDATA "res/fourpoints.jpg"
+IMG_shattered RCDATA "res/shattered.jpg"
+IMG_trailerpark RCDATA "res/trailerpark.jpg"
+IMG_trailerpark_night RCDATA "res/trailerpark_night.jpg"
+IMG_trailerpark_mu RCDATA "res/trailerpark_mu.jpg"
+IMG_spires RCDATA "res/spires.jpg"
+IMG_tower RCDATA "res/tower.jpg"
+IMG_shippingyard RCDATA "res/shippingyard.jpg"
+IMG_twoports RCDATA "res/twoports.jpg"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1,0,0,0
+PRODUCTVERSION 1,0,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904b0"
+    BEGIN
+      VALUE "CompanyName", "Leshugan"
+      VALUE "FileDescription", "Loadout Launcher"
+      VALUE "FileVersion", "1.000"
+      VALUE "ProductName", "Loadout Launcher"
+      VALUE "ProductVersion", "1.000"
+      VALUE "OriginalFilename", "LoadoutLauncher.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

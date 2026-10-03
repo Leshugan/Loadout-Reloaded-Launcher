@@ -1,0 +1,974 @@
+// ------------------------------------------------------------------ textures
+struct Tex { ImTextureID id = 0; int w = 0, h = 0; };
+static std::map<std::string, Tex> g_tex;
+
+static Tex TexFromMemory(const void* data, int size)
+{
+    Tex t;
+    int w, h, n;
+    unsigned char* px = stbi_load_from_memory((const unsigned char*)data, size, &w, &h, &n, 4);
+    if (!px) return t;
+    D3D11_TEXTURE2D_DESC d{};
+    d.Width = w; d.Height = h; d.MipLevels = 0; d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_R8G8B8A8_UNORM; d.SampleDesc.Count = 1;
+    d.Usage = D3D11_USAGE_DEFAULT; d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    d.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+    ID3D11Texture2D* tx = nullptr;
+    if (SUCCEEDED(g_dev->CreateTexture2D(&d, nullptr, &tx))) {
+        g_ctx->UpdateSubresource(tx, 0, nullptr, px, w * 4, 0);
+        ID3D11ShaderResourceView* srv = nullptr;
+        D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
+        sv.Format = DXGI_FORMAT_R8G8B8A8_UNORM; sv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D; sv.Texture2D.MipLevels = (UINT)-1;
+        g_dev->CreateShaderResourceView(tx, &sv, &srv);
+        if (srv) g_ctx->GenerateMips(srv);
+        tx->Release();
+        t.id = (ImTextureID)(intptr_t)srv; t.w = w; t.h = h;
+    }
+    stbi_image_free(px);
+    return t;
+}
+
+static void LoadTextures()
+{
+    const char* names[] = {"brewery","drillcavern","drillcavern_night","fissure","fissure_night","fourpoints","shattered",
+                           "trailerpark","trailerpark_night","trailerpark_mu","shootinggallery","spires","tower","shippingyard","twoports","icon"};
+    for (const char* n : names) {
+        std::string rn = std::string("IMG_") + n;
+        HRSRC r = FindResourceA(nullptr, rn.c_str(), (LPCSTR)RT_RCDATA);
+        if (!r) { LogF("image resource missing: %s", n); continue; }
+        HGLOBAL g = LoadResource(nullptr, r);
+        g_tex[n] = TexFromMemory(LockResource(g), (int)SizeofResource(nullptr, r));
+    }
+}
+static ImTextureID TexId(const char* n)
+{
+    if (!n) return 0;
+    auto it = g_tex.find(n);
+    return it == g_tex.end() ? 0 : it->second.id;
+}
+
+// ------------------------------------------------------------------ theme
+static ImFont* fReg = nullptr;
+static ImFont* fSemi = nullptr;
+static ImFont* fBold = nullptr;
+
+static const ImU32 C_BG = IM_COL32(17, 18, 21, 255);
+static const ImU32 C_PANEL = IM_COL32(24, 26, 30, 255);
+static const ImU32 C_CARD = IM_COL32(32, 35, 41, 255);
+static const ImU32 C_CARD_HOV = IM_COL32(40, 44, 51, 255);
+static const ImU32 C_ACCENT = IM_COL32(226, 70, 48, 255);
+static const ImU32 C_ACCENT_HOV = IM_COL32(242, 92, 70, 255);
+static const ImU32 C_TEXT = IM_COL32(236, 236, 238, 255);
+static const ImU32 C_DIM = IM_COL32(150, 156, 166, 255);
+static const ImU32 C_LINE = IM_COL32(48, 52, 60, 255);
+static const ImU32 C_GREEN = IM_COL32(76, 196, 120, 255);
+static const ImU32 C_YELLOW = IM_COL32(236, 186, 64, 255);
+static const ImU32 C_RED = IM_COL32(226, 80, 70, 255);
+
+static ImVec4 V(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
+
+static void LoadFonts()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    char win[MAX_PATH]; GetWindowsDirectoryA(win, MAX_PATH);
+    std::string fd = std::string(win) + "\\Fonts\\";
+    auto add = [&](const char* file) -> ImFont* {
+        std::string p = fd + file;
+        if (GetFileAttributesA(p.c_str()) == INVALID_FILE_ATTRIBUTES) return nullptr;
+        return io.Fonts->AddFontFromFileTTF(p.c_str(), 17.0f);
+    };
+    fReg = add("segoeui.ttf");
+    if (!fReg) fReg = io.Fonts->AddFontDefault();
+    fSemi = add("seguisb.ttf"); if (!fSemi) fSemi = fReg;
+    fBold = add("segoeuib.ttf"); if (!fBold) fBold = fSemi;
+    io.FontDefault = fReg;
+}
+
+static void ApplyStyle()
+{
+    ImGuiStyle& st = ImGui::GetStyle();
+    st = ImGuiStyle();
+    ImGui::StyleColorsDark(&st);
+    st.WindowPadding = ImVec2(0, 0);
+    st.FramePadding = ImVec2(12, 8);
+    st.ItemSpacing = ImVec2(10, 10);
+    st.ItemInnerSpacing = ImVec2(8, 6);
+    st.FrameRounding = 7;
+    st.ChildRounding = 0;
+    st.PopupRounding = 10;
+    st.WindowRounding = 12;
+    st.ScrollbarSize = 10;
+    st.ScrollbarRounding = 8;
+    st.GrabRounding = 6;
+    st.WindowBorderSize = 0;
+    st.ChildBorderSize = 0;
+    st.PopupBorderSize = 1;
+    ImVec4* c = st.Colors;
+    c[ImGuiCol_WindowBg] = V(C_BG);
+    c[ImGuiCol_ChildBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_PopupBg] = V(IM_COL32(28, 30, 35, 255));
+    c[ImGuiCol_Border] = V(C_LINE);
+    c[ImGuiCol_Text] = V(C_TEXT);
+    c[ImGuiCol_TextDisabled] = V(C_DIM);
+    c[ImGuiCol_FrameBg] = V(IM_COL32(36, 39, 46, 255));
+    c[ImGuiCol_FrameBgHovered] = V(IM_COL32(44, 48, 56, 255));
+    c[ImGuiCol_FrameBgActive] = V(IM_COL32(50, 54, 63, 255));
+    c[ImGuiCol_Button] = V(IM_COL32(42, 46, 54, 255));
+    c[ImGuiCol_ButtonHovered] = V(IM_COL32(54, 59, 69, 255));
+    c[ImGuiCol_ButtonActive] = V(IM_COL32(62, 68, 80, 255));
+    c[ImGuiCol_Header] = V(IM_COL32(42, 46, 54, 255));
+    c[ImGuiCol_HeaderHovered] = V(IM_COL32(54, 59, 69, 255));
+    c[ImGuiCol_HeaderActive] = V(IM_COL32(62, 68, 80, 255));
+    c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_ScrollbarGrab] = V(IM_COL32(60, 65, 75, 255));
+    c[ImGuiCol_ScrollbarGrabHovered] = V(IM_COL32(80, 86, 98, 255));
+    c[ImGuiCol_ScrollbarGrabActive] = V(IM_COL32(95, 102, 115, 255));
+    c[ImGuiCol_ModalWindowDimBg] = ImVec4(0, 0, 0, 0.6f);
+    c[ImGuiCol_NavCursor] = V(C_ACCENT);
+    c[ImGuiCol_CheckMark] = V(C_ACCENT);
+    c[ImGuiCol_TextSelectedBg] = V(IM_COL32(226, 70, 48, 110));
+    st.ScaleAllSizes(S);
+    st.FontSizeBase = 17.0f * S;
+    st.FontScaleDpi = 1.0f;
+}
+
+// ------------------------------------------------------------------ selection logic
+static int L() { return g_set.lang; }
+static const char* T(int id) { return TXT[id][L()]; }
+
+static const char* EX_CONFIRM[3] = {"Продолжить?", "Continue?", "¿Continuar?"};
+static const char* EX_YES[3] = {"Да", "Yes", "Sí"};
+static const char* EX_NO[3] = {"Нет", "No", "No"};
+static const char* EX_NOW[3] = {"Сейчас в игре", "Now in game", "Ahora en el juego"};
+static const char* EX_MUTE[3] = {"Выключать звук игры, пока она свёрнута", "Mute the game while it is minimized", "Silenciar el juego mientras está minimizado"};
+static const char* EX_LINKS[3] = {"Полезные ссылки", "Useful links", "Enlaces útiles"};
+struct LinkItem { const char* title[3]; const char* url; };
+static const LinkItem LINKS[] = {
+    {{"Проект Loadout Reloaded", "Loadout Reloaded project", "Proyecto Loadout Reloaded"}, "https://gitlab.com/Bedebao/loadout-reloaded"},
+    {{"Создатель лаунчера", "Launcher creator", "Creador del lanzador"}, "https://github.com/Leshugan"},
+    {{"Discord-сервер", "Discord server", "Servidor de Discord"}, "https://discord.gg/maMcHa2dzS"},
+};
+
+static bool StartsWith(const std::string& s, const std::string& p) { return s.size() >= p.size() && s.compare(0, p.size(), p) == 0; }
+
+static const ModeInfo* FindMode(const std::string& suffix)
+{
+    for (int i = 0; i < MODES_N; i++) if (suffix == MODES[i].suffix) return &MODES[i];
+    return nullptr;
+}
+
+static std::vector<std::string> ModesFor(int base, bool night)
+{
+    const BaseMap& b = BASE_MAPS[base];
+    std::string prefix = night ? b.nightPrefix : b.code;
+    std::vector<std::string> found;
+    for (int i = 0; i < ALL_MAPS_N; i++) {
+        std::string m = ALL_MAPS[i];
+        if (m == "drillcavern_beta_kc") continue;
+        if (m == prefix) { found.push_back(""); continue; }
+        if (!StartsWith(m, prefix + "_")) continue;
+        if (!night && b.nightPrefix && m.find("night") != std::string::npos) continue;
+        found.push_back(m.substr(prefix.size() + 1));
+    }
+    std::vector<std::string> out;
+    for (int i = 0; i < MODES_N; i++)
+        for (auto& f : found) if (f == MODES[i].suffix) out.push_back(f);
+    for (auto& f : found) if (!FindMode(f)) out.push_back(f);
+    return out;
+}
+
+static std::string Compose(int base, bool night, const std::string& suffix)
+{
+    const BaseMap& b = BASE_MAPS[base];
+    if (b.single) return b.code;
+    std::string p = night ? b.nightPrefix : b.code;
+    return suffix.empty() ? p : p + "_" + suffix;
+}
+
+// returns base index or -1
+static int ParseCode(const std::string& code, bool* night, std::string* suffix)
+{
+    for (int i = 0; i < BASE_MAPS_N; i++) {
+        const BaseMap& b = BASE_MAPS[i];
+        if (b.single) { if (code == b.code) { *night = false; suffix->clear(); return i; } continue; }
+        if (b.nightPrefix) {
+            std::string np = b.nightPrefix;
+            if (code == np) { *night = true; suffix->clear(); return i; }
+            if (StartsWith(code, np + "_")) { *night = true; *suffix = code.substr(np.size() + 1); return i; }
+        }
+        std::string dp = b.code;
+        if (code == dp) { *night = false; suffix->clear(); return i; }
+        if (StartsWith(code, dp + "_")) { *night = false; *suffix = code.substr(dp.size() + 1); return i; }
+    }
+    return -1;
+}
+
+// current selection
+static int selBase = -1;
+static int selNight = -1;      // -1 not chosen, 0 day, 1 night
+static std::string selMode;
+static bool selModeChosen = false;
+static std::string selCustom;  // raw code not matching our list
+static int step = 0;           // 0 map, 1 time, 2 mode
+static std::string finalCode;
+static char customBuf[64] = "";
+static char serverBuf[64] = "";
+static std::string flashMsg; static double flashUntil = 0; static ImU32 flashCol = 0;
+static std::string customErr;
+
+static void Flash(const std::string& m, ImU32 col) { flashMsg = m; flashCol = col; flashUntil = ImGui::GetTime() + 4.0; }
+
+static bool SelectionComplete() { return !finalCode.empty(); }
+
+static void CommitSelection(const std::string& code)
+{
+    finalCode = code;
+    bool sent = GameWriteMapNow(code);
+    Flash(sent ? T(T_SENT) : T(T_PENDING), sent ? C_GREEN : C_YELLOW);
+}
+
+static void LoadCode(const std::string& code)
+{
+    bool night; std::string suf;
+    int b = ParseCode(code, &night, &suf);
+    selCustom.clear();
+    if (b >= 0) {
+        selBase = b; selNight = BASE_MAPS[b].nightPrefix ? (night ? 1 : 0) : -1; selMode = suf; selModeChosen = true;
+        step = BASE_MAPS[b].single ? 0 : 2;
+    } else {
+        selBase = -1; selNight = -1; selMode.clear(); selModeChosen = false; selCustom = code; step = 0;
+    }
+    CommitSelection(code);
+}
+
+// ------------------------------------------------------------------ widgets
+static ImVec2 operator+(ImVec2 a, ImVec2 b) { return ImVec2(a.x + b.x, a.y + b.y); }
+
+static void TextAt(ImDrawList* dl, ImFont* f, float size, ImVec2 p, ImU32 col, const char* t, float wrap = 0)
+{
+    dl->AddText(f, size * S, p, col, t, nullptr, wrap);
+}
+
+static ImU32 PlaceholderColor(const char* code)
+{
+    unsigned h = 2166136261u; for (const char* c = code; *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
+    static const ImU32 pal[] = {IM_COL32(58, 74, 96, 255), IM_COL32(86, 64, 52, 255), IM_COL32(52, 82, 72, 255),
+                                IM_COL32(84, 58, 84, 255), IM_COL32(74, 78, 50, 255), IM_COL32(60, 64, 88, 255)};
+    return pal[h % 6];
+}
+
+static void DrawPlaceholder(ImDrawList* dl, ImVec2 a, ImVec2 b, const char* code, const char* name, float rounding, ImDrawFlags fl)
+{
+    ImU32 c = PlaceholderColor(code);
+    dl->AddRectFilled(a, b, c, rounding, fl);
+    // soft diagonal stripes
+    dl->PushClipRect(a, b, true);
+    float w = b.x - a.x, h = b.y - a.y;
+    for (float x = -h; x < w; x += 22 * S)
+        dl->AddLine(ImVec2(a.x + x, b.y), ImVec2(a.x + x + h, a.y), IM_COL32(255, 255, 255, 14), 6 * S);
+    std::string up = name; for (auto& ch : up) ch = (char)toupper((unsigned char)ch);
+    size_t br = up.find(" (");
+    if (br != std::string::npos) up = up.substr(0, br);
+    float fs = 30 * S;
+    ImVec2 ts = fBold->CalcTextSizeA(fs, FLT_MAX, 0, up.c_str());
+    if (ts.x > w - 20 * S) { fs *= (w - 20 * S) / ts.x; ts = fBold->CalcTextSizeA(fs, FLT_MAX, 0, up.c_str()); }
+    dl->AddText(fBold, fs, ImVec2(a.x + (w - ts.x) / 2, a.y + (h - ts.y) / 2), IM_COL32(255, 255, 255, 70), up.c_str());
+    dl->PopClipRect();
+}
+
+static void Pill(ImDrawList* dl, ImVec2 topRight, const char* text, ImU32 bg, ImU32 fg)
+{
+    ImVec2 ts = fSemi->CalcTextSizeA(13 * S, FLT_MAX, 0, text);
+    ImVec2 a(topRight.x - ts.x - 16 * S, topRight.y), b(topRight.x, topRight.y + ts.y + 6 * S);
+    dl->AddRectFilled(a, b, bg, 20 * S);
+    dl->AddText(fSemi, 13 * S, ImVec2(a.x + 8 * S, a.y + 3 * S), fg, text);
+}
+
+// image card with title + subtitle
+static bool ImageCard(const char* id, ImTextureID tex, const char* code, float w, const char* title, const char* sub, bool pve, bool selected, bool now, ImTextureID tex2 = 0)
+{
+    float imgH = std::floor(w * 9.0f / 16.0f);
+    float textH = 62 * S;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImVec2 size(w, imgH + textH);
+    bool clicked = ImGui::InvisibleButton(id, size);
+    bool hov = ImGui::IsItemHovered();
+    if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float r = 10 * S;
+    dl->AddRectFilled(p, p + size, hov ? C_CARD_HOV : C_CARD, r);
+    ImVec2 ia = p, ib = p + ImVec2(w, imgH);
+    if (tex) {
+        float zoom = hov ? 0.03f : 0.0f;
+        dl->AddImageRounded(ImTextureRef(tex), ia, ib, ImVec2(zoom, zoom), ImVec2(1 - zoom, 1 - zoom), IM_COL32_WHITE, r, ImDrawFlags_RoundCornersTop);
+        if (tex2) {
+            // day/night variants: smooth cross-fade, 3.5 s each
+            double t = std::fmod(ImGui::GetTime() + (code[0] % 7) * 0.9, 8.0);
+            float a = t < 3.3 ? 0.0f : t < 4.0 ? (float)((t - 3.3) / 0.7) : t < 7.3 ? 1.0f : (float)(1.0 - (t - 7.3) / 0.7);
+            a = a * a * (3 - 2 * a);
+            if (a > 0.01f) dl->AddImageRounded(ImTextureRef(tex2), ia, ib, ImVec2(zoom, zoom), ImVec2(1 - zoom, 1 - zoom), IM_COL32(255, 255, 255, (int)(a * 255)), r, ImDrawFlags_RoundCornersTop);
+            const char* lbl = a < 0.5f ? TXT[T_DAY][L()] : TXT[T_NIGHT][L()];
+            ImVec2 ts = fSemi->CalcTextSizeA(13 * S, FLT_MAX, 0, lbl);
+            ImVec2 pa(ia.x + 8 * S, ia.y + 8 * S), pb(pa.x + ts.x + 16 * S, pa.y + ts.y + 6 * S);
+            dl->AddRectFilled(pa, pb, IM_COL32(20, 22, 26, 210), 20 * S);
+            dl->AddText(fSemi, 13 * S, ImVec2(pa.x + 8 * S, pa.y + 3 * S), a < 0.5f ? IM_COL32(250, 210, 110, 255) : IM_COL32(140, 180, 255, 255), lbl);
+        }
+    } else {
+        DrawPlaceholder(dl, ia, ib, code, title, r, ImDrawFlags_RoundCornersTop);
+    }
+    // darken bottom of image
+    dl->AddRectFilledMultiColor(ImVec2(ia.x, ib.y - 30 * S), ib, IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 90), IM_COL32(0, 0, 0, 90));
+    float tx = p.x + 12 * S;
+    TextAt(dl, fBold, 17, ImVec2(tx, ib.y + 8 * S), C_TEXT, title);
+    dl->PushClipRect(ImVec2(p.x, ib.y), p + size, true);
+    TextAt(dl, fReg, 14, ImVec2(tx, ib.y + 32 * S), C_DIM, sub, w - 24 * S);
+    dl->PopClipRect();
+    float py = p.y + 8 * S;
+    if (pve) { Pill(dl, ImVec2(p.x + w - 8 * S, py), "PvE", IM_COL32(20, 22, 26, 210), C_GREEN); }
+    if (now) { Pill(dl, ImVec2(p.x + w - 8 * S, py + (pve ? 26 * S : 0)), EX_NOW[L()], IM_COL32(20, 22, 26, 210), C_YELLOW); }
+    if (selected) dl->AddRect(p, p + size, C_ACCENT, r, 0, 3 * S);
+    else if (hov) dl->AddRect(p, p + size, IM_COL32(255, 255, 255, 60), r, 0, 1.5f * S);
+    if (pve && hov && ImGui::BeginTooltip()) { ImGui::TextUnformatted(T(T_PVE_TIP)); ImGui::EndTooltip(); }
+    return clicked;
+}
+
+static bool TextCard(const char* id, float w, float h, const char* title, const char* sub, const char* tag, ImU32 tagCol, bool selected, bool now)
+{
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    ImVec2 size(w, h);
+    bool clicked = ImGui::InvisibleButton(id, size);
+    bool hov = ImGui::IsItemHovered();
+    if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float r = 10 * S;
+    dl->AddRectFilled(p, p + size, hov ? C_CARD_HOV : C_CARD, r);
+    dl->AddRectFilled(p, ImVec2(p.x + 5 * S, p.y + h), selected ? C_ACCENT : IM_COL32(60, 65, 75, 255), r, ImDrawFlags_RoundCornersLeft);
+    TextAt(dl, fBold, 18, ImVec2(p.x + 20 * S, p.y + 12 * S), C_TEXT, title);
+    dl->PushClipRect(p, p + size, true);
+    TextAt(dl, fReg, 14.5f, ImVec2(p.x + 20 * S, p.y + 40 * S), C_DIM, sub, w - 36 * S);
+    dl->PopClipRect();
+    float py = p.y + 10 * S;
+    if (tag) { Pill(dl, ImVec2(p.x + w - 10 * S, py), tag, IM_COL32(20, 22, 26, 220), tagCol); py += 26 * S; }
+    if (now) Pill(dl, ImVec2(p.x + w - 10 * S, py), EX_NOW[L()], IM_COL32(20, 22, 26, 220), C_YELLOW);
+    if (selected) dl->AddRect(p, p + size, C_ACCENT, r, 0, 2.5f * S);
+    else if (hov) dl->AddRect(p, p + size, IM_COL32(255, 255, 255, 60), r, 0, 1.5f * S);
+    return clicked;
+}
+
+static bool AccentButton(const char* label, ImVec2 size, bool enabled = true)
+{
+    ImGui::PushStyleColor(ImGuiCol_Button, V(C_ACCENT));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V(C_ACCENT_HOV));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, V(IM_COL32(200, 58, 40, 255)));
+    ImGui::PushStyleColor(ImGuiCol_Text, V(IM_COL32_WHITE));
+    ImGui::BeginDisabled(!enabled);
+    bool r = ImGui::Button(label, size);
+    ImGui::EndDisabled();
+    ImGui::PopStyleColor(4);
+    return r;
+}
+
+static void SectionTitle(const char* t)
+{
+    ImGui::PushFont(fBold, 15 * S);
+    ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
+    std::string up = t;
+    ImGui::TextUnformatted(up.c_str());
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+}
+
+// ------------------------------------------------------------------ screens
+static std::string NowInGame() { return GameLastWrittenMap(); }
+
+static void DrawMapGrid()
+{
+    float avail = ImGui::GetContentRegionAvail().x;
+    float gap = 16 * S;
+    int cols = (int)((avail + gap) / (250 * S + gap)); if (cols < 1) cols = 1;
+    float w = std::floor((avail - gap * (cols - 1)) / cols);
+    std::string now = NowInGame();
+    bool nNight; std::string nSuf; int nowBase = now.empty() ? -1 : ParseCode(now, &nNight, &nSuf);
+
+    for (int sec = 0; sec < 2; sec++) {
+        if (sec == 1) ImGui::Dummy(ImVec2(0, 10 * S));
+        SectionTitle(T(sec == 0 ? T_SEC_MAIN : T_SEC_OTHER));
+        ImGui::Dummy(ImVec2(0, 2 * S));
+        int col = 0;
+        for (int i = 0; i < BASE_MAPS_N; i++) {
+            const BaseMap& b = BASE_MAPS[i];
+            if (b.main != (sec == 0)) continue;
+            if (col > 0) ImGui::SameLine(0, gap);
+            ImGui::PushID(i);
+            if (ImageCard("card", TexId(b.img), b.code, w, b.name, b.desc[L()], b.pve, selBase == i && selCustom.empty(), nowBase == i, b.nightPrefix ? TexId(b.imgNight) : 0)) {
+                selBase = i; selNight = -1; selMode.clear(); selModeChosen = false; selCustom.clear(); finalCode.clear();
+                if (b.single) CommitSelection(b.code);
+                else if (b.nightPrefix) step = 1;
+                else step = 2;
+            }
+            ImGui::PopID();
+            col = (col + 1) % cols;
+            if (col == 0) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+        }
+        if (col != 0) ImGui::Dummy(ImVec2(0, 0));
+    }
+    ImGui::Dummy(ImVec2(0, 16 * S));
+}
+
+static void DrawTimeStep()
+{
+    const BaseMap& b = BASE_MAPS[selBase];
+    float avail = ImGui::GetContentRegionAvail().x;
+    float gap = 20 * S;
+    float w = std::floor((avail - gap) / 2); if (w > 560 * S) w = 560 * S;
+    for (int n = 0; n < 2; n++) {
+        if (n) ImGui::SameLine(0, gap);
+        ImGui::PushID(n);
+        std::string title = std::string(b.name) + " — " + T(n ? T_NIGHT : T_DAY);
+        if (ImageCard("t", TexId(n ? b.imgNight : b.img), b.code, w, title.c_str(), b.desc[L()], false, selNight == n, false)) {
+            selNight = n; selMode.clear(); selModeChosen = false; finalCode.clear();
+            step = 2;
+        }
+        ImGui::PopID();
+    }
+}
+
+static void DrawModeStep()
+{
+    const BaseMap& b = BASE_MAPS[selBase];
+    bool night = selNight == 1;
+    std::vector<std::string> modes = ModesFor(selBase, night);
+    float avail = ImGui::GetContentRegionAvail().x;
+    float gap = 14 * S;
+    int cols = (int)((avail + gap) / (300 * S + gap)); if (cols < 1) cols = 1; if (cols > 3) cols = 3;
+    float w = std::floor((avail - gap * (cols - 1)) / cols);
+    float h = 92 * S;
+    std::string now = NowInGame();
+    // preview strip
+    ImTextureID tex = TexId(night ? b.imgNight : b.img);
+    {
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float ph = 120 * S;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 a = p, bb = p + ImVec2(avail, ph);
+        if (tex) {
+            float aspect = avail / ph; // crop center of 16:9 image
+            float v = (16.0f / 9.0f) / aspect; float v0 = 0.5f - v / 2, v1 = 0.5f + v / 2;
+            dl->AddImageRounded(ImTextureRef(tex), a, bb, ImVec2(0, v0), ImVec2(1, v1), IM_COL32(255, 255, 255, 255), 10 * S);
+        } else DrawPlaceholder(dl, a, bb, b.code, b.name, 10 * S, 0);
+        dl->AddRectFilledMultiColor(a, bb, IM_COL32(0, 0, 0, 170), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 170));
+        std::string t = b.name;
+        if (b.nightPrefix) t += std::string(" — ") + T(night ? T_NIGHT : T_DAY);
+        TextAt(dl, fBold, 26, ImVec2(a.x + 20 * S, a.y + ph / 2 - 30 * S), C_TEXT, t.c_str());
+        TextAt(dl, fReg, 15, ImVec2(a.x + 20 * S, a.y + ph / 2 + 6 * S), IM_COL32(220, 220, 225, 255), b.desc[L()]);
+        ImGui::Dummy(ImVec2(avail, ph));
+        ImGui::Dummy(ImVec2(0, 4 * S));
+    }
+    int col = 0;
+    for (size_t i = 0; i < modes.size(); i++) {
+        const ModeInfo* m = FindMode(modes[i]);
+        std::string name = m ? (m->name ? m->name : T(T_NO_MODE)) : modes[i];
+        const char* desc = m ? m->desc[L()] : modes[i].c_str();
+        bool pveMode = modes[i] == "botwave" || modes[i] == "botwaves";
+        std::string code = Compose(selBase, night, modes[i]);
+        if (col > 0) ImGui::SameLine(0, gap);
+        ImGui::PushID((int)i);
+        if (TextCard("m", w, h, name.c_str(), desc, pveMode ? "PvE" : nullptr, C_GREEN, selModeChosen && selMode == modes[i] && selCustom.empty(), code == now)) {
+            selMode = modes[i]; selModeChosen = true; selCustom.clear();
+            CommitSelection(code);
+        }
+        ImGui::PopID();
+        col = (col + 1) % cols;
+        if (col == 0) ImGui::Dummy(ImVec2(0, gap - ImGui::GetStyle().ItemSpacing.y));
+    }
+}
+
+static void DrawSteps()
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    bool hasNight = selBase >= 0 && BASE_MAPS[selBase].nightPrefix;
+    bool single = selBase >= 0 && BASE_MAPS[selBase].single;
+    struct St { int id; int target; bool enabled; } st[3] = {
+        {T_STEP_MAP, 0, true},
+        {T_STEP_TIME, 1, hasNight},
+        {T_STEP_MODE, 2, selBase >= 0 && !single && (!hasNight || selNight >= 0)},
+    };
+    for (int i = 0; i < 3; i++) {
+        if (i) {
+            ImGui::SameLine(0, 6 * S);
+            ImVec2 p = ImGui::GetCursorScreenPos();
+            float y = p.y + ImGui::GetFrameHeight() / 2;
+            dl->AddLine(ImVec2(p.x, y), ImVec2(p.x + 22 * S, y), C_LINE, 2 * S);
+            ImGui::Dummy(ImVec2(22 * S, 1));
+            ImGui::SameLine(0, 6 * S);
+        }
+        bool active = step == st[i].target;
+        char lbl[128]; snprintf(lbl, sizeof(lbl), "%d  %s##st%d", i + 1, T(st[i].id), i);
+        ImGui::PushFont(fSemi, 16 * S);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 20 * S);
+        if (active) {
+            ImGui::PushStyleColor(ImGuiCol_Button, V(C_ACCENT));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V(C_ACCENT_HOV));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, V(C_ACCENT));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, V(IM_COL32(32, 35, 41, 255)));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V(IM_COL32(44, 48, 56, 255)));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, V(IM_COL32(50, 54, 63, 255)));
+        }
+        ImGui::BeginDisabled(!st[i].enabled);
+        if (ImGui::Button(lbl) && st[i].enabled) step = st[i].target;
+        ImGui::EndDisabled();
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+        ImGui::PopFont();
+    }
+}
+
+static void DrawSummaryRow(const char* label, const char* value)
+{
+    ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
+    ImGui::TextUnformatted(label);
+    ImGui::PopStyleColor();
+    ImGui::SameLine(110 * S);
+    ImGui::PushFont(fSemi, 16 * S);
+    ImGui::TextUnformatted(value);
+    ImGui::PopFont();
+}
+
+static bool g_openConfirmStart = false;
+static bool g_openSettings = false;
+static bool g_openLinks = false;
+static double g_copiedUntil = 0;
+
+static void DrawRightPanel(float width)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    float pad = 20 * S;
+    ImGui::SetCursorPos(ImVec2(pad, pad));
+    ImGui::BeginGroup();
+    float w = width - pad * 2;
+    ImGui::PushItemWidth(w);
+
+    // preview
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    float ph = std::floor(w * 9 / 16);
+    const BaseMap* b = selBase >= 0 && selCustom.empty() ? &BASE_MAPS[selBase] : nullptr;
+    const char* imgName = b ? (selNight == 1 ? b->imgNight : b->img) : nullptr;
+    if (b && !strcmp(b->code, "gliese_581") && selNight != 1 && selModeChosen && selMode == "mu") imgName = "trailerpark_mu";
+    ImTextureID tex = TexId(imgName);
+    if (tex) dl->AddImageRounded(ImTextureRef(tex), p, p + ImVec2(w, ph), ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, 10 * S);
+    else if (b) DrawPlaceholder(dl, p, p + ImVec2(w, ph), b->code, b->name, 10 * S, 0);
+    else {
+        dl->AddRectFilled(p, p + ImVec2(w, ph), C_CARD, 10 * S);
+        const char* t = selCustom.empty() ? T(T_CHOOSE_MAP) : selCustom.c_str();
+        ImVec2 ts = fSemi->CalcTextSizeA(16 * S, FLT_MAX, 0, t);
+        dl->AddText(fSemi, 16 * S, ImVec2(p.x + (w - ts.x) / 2, p.y + (ph - ts.y) / 2), C_DIM, t);
+    }
+    ImGui::Dummy(ImVec2(w, ph));
+    ImGui::Dummy(ImVec2(0, 2 * S));
+
+    // summary
+    if (b) {
+        DrawSummaryRow(T(T_MAP), b->name);
+        if (b->nightPrefix) DrawSummaryRow(T(T_TIME), selNight < 0 ? "—" : T(selNight ? T_NIGHT : T_DAY));
+        if (!b->single) {
+            std::string mn = "—";
+            if (selModeChosen) { const ModeInfo* m = FindMode(selMode); mn = m ? (m->name ? m->name : T(T_NO_MODE)) : selMode; }
+            DrawSummaryRow(T(T_MODE), mn.c_str());
+        }
+    } else if (!selCustom.empty()) {
+        DrawSummaryRow(T(T_MAP), T(T_CUSTOM_CODE));
+    }
+    if (SelectionComplete()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
+        ImGui::TextUnformatted(T(T_MAP_CODE));
+        ImGui::PopStyleColor();
+        ImGui::SameLine(110 * S);
+        ImGui::PushFont(fSemi, 16 * S);
+        ImGui::PushStyleColor(ImGuiCol_Text, V(C_YELLOW));
+        ImGui::TextUnformatted(finalCode.c_str());
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+        if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::IsItemClicked()) { ImGui::SetClipboardText(finalCode.c_str()); g_copiedUntil = ImGui::GetTime() + 1.5; }
+        if (ImGui::GetTime() < g_copiedUntil) { ImGui::SameLine(); ImGui::TextColored(V(C_GREEN), "%s", T(T_COPIED)); }
+    }
+    ImGui::Dummy(ImVec2(0, 4 * S));
+
+    // main action
+    int gs = g_gameState;
+    bool running = gs == GS_READY || gs == GS_WAIT_INIT || gs == GS_LAUNCHING;
+    if (SelectionComplete()) {
+        ImGui::PushFont(fBold, 19 * S);
+        if (running) {
+            if (AccentButton(T(T_RETURN), ImVec2(w, 54 * S))) {
+                if (GameWriteMapNow(finalCode)) Flash(T(T_SENT), C_GREEN);
+                GameReturnToGame();
+            }
+        } else if (gs != GS_NOEXE) {
+            if (AccentButton(T(T_BTN_START), ImVec2(w, 54 * S))) GameRequestLaunch();
+        }
+        ImGui::PopFont();
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+        ImGui::TextUnformatted(T(T_INCOMPLETE));
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+    if (!flashMsg.empty() && ImGui::GetTime() < flashUntil) {
+        ImGui::PushStyleColor(ImGuiCol_Text, V(flashCol));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+        ImGui::TextUnformatted(flashMsg.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+    if (SelectionComplete()) {
+        ImGui::PushFont(fReg, 14 * S);
+        ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+        ImGui::TextUnformatted(T(T_HINT_APPLY));
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+        ImGui::PopFont();
+    }
+
+    // favorites
+    ImGui::Dummy(ImVec2(0, 8 * S));
+    { ImVec2 lp = ImGui::GetCursorScreenPos(); dl->AddLine(lp, ImVec2(lp.x + w, lp.y), C_LINE, 1); }
+    ImGui::Dummy(ImVec2(0, 6 * S));
+    SectionTitle(T(T_FAV));
+    float btnW = 96 * S;
+    for (int i = 0; i < 3; i++) {
+        ImGui::PushID(i);
+        std::string fav; { std::lock_guard<std::mutex> lk(g_setMu); fav = g_set.fav[i]; }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(V(C_DIM), "%d", i + 1);
+        ImGui::SameLine(22 * S);
+        float tw = w - 22 * S - btnW * 2 - 2 * ImGui::GetStyle().ItemSpacing.x;
+        ImVec2 cp = ImGui::GetCursorScreenPos();
+        ImGui::PushClipRect(cp, ImVec2(cp.x + tw, cp.y + ImGui::GetFrameHeight()), true);
+        if (fav.empty()) ImGui::TextColored(V(IM_COL32(100, 106, 116, 255)), "%s", T(T_EMPTY));
+        else ImGui::TextUnformatted(fav.c_str());
+        ImGui::PopClipRect();
+        ImGui::SameLine(w - btnW * 2 - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::BeginDisabled(fav.empty());
+        if (ImGui::Button(T(T_LOAD), ImVec2(btnW, 0))) LoadCode(fav);
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!SelectionComplete());
+        if (ImGui::Button(T(T_SAVE_HERE), ImVec2(btnW, 0))) {
+            { std::lock_guard<std::mutex> lk(g_setMu); g_set.fav[i] = finalCode; }
+            SettingsSave();
+            Flash(T(T_SAVED), C_GREEN);
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+
+    // custom map
+    ImGui::Dummy(ImVec2(0, 8 * S));
+    { ImVec2 lp = ImGui::GetCursorScreenPos(); dl->AddLine(lp, ImVec2(lp.x + w, lp.y), C_LINE, 1); }
+    ImGui::Dummy(ImVec2(0, 6 * S));
+    SectionTitle(T(T_CUSTOM));
+    ImGui::SetNextItemWidth(w - btnW - ImGui::GetStyle().ItemSpacing.x);
+    bool enter = ImGui::InputTextWithHint("##custom", T(T_CUSTOM_HINT), customBuf, sizeof(customBuf), ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CharsNoBlank);
+    ImGui::SameLine();
+    if (ImGui::Button(T(T_SELECT), ImVec2(btnW, 0)) || enter) {
+        std::string c = customBuf;
+        if (c.size() < 4) customErr = T(T_TOO_SHORT);
+        else if (c.size() > 50) customErr = T(T_TOO_LONG);
+        else {
+            customErr.clear();
+            { std::lock_guard<std::mutex> lk(g_setMu); g_set.customMap = c; }
+            SettingsSave();
+            LoadCode(c);
+        }
+    }
+    if (!customErr.empty()) ImGui::TextColored(V(C_RED), "%s", customErr.c_str());
+
+    // starting map
+    ImGui::Dummy(ImVec2(0, 8 * S));
+    { ImVec2 lp = ImGui::GetCursorScreenPos(); dl->AddLine(lp, ImVec2(lp.x + w, lp.y), C_LINE, 1); }
+    ImGui::Dummy(ImVec2(0, 6 * S));
+    SectionTitle(T(T_START_MAP));
+    std::string sm; { std::lock_guard<std::mutex> lk(g_setMu); sm = g_set.startMap; }
+    if (sm.empty() || sm == "shooting_gallery_solo") ImGui::Text("shooting_gallery_solo  (%s)", T(T_START_DEFAULT));
+    else ImGui::TextColored(V(C_YELLOW), "%s", sm.c_str());
+    ImGui::PushFont(fReg, 14 * S);
+    ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
+    ImGui::TextUnformatted(T(T_START_DESC));
+    ImGui::PopTextWrapPos();
+    ImGui::PopStyleColor();
+    ImGui::PopFont();
+    ImGui::BeginDisabled(!SelectionComplete());
+    if (ImGui::Button(T(T_MAKE_START), ImVec2(w - btnW - ImGui::GetStyle().ItemSpacing.x, 0))) g_openConfirmStart = true;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(sm.empty());
+    if (ImGui::Button(T(T_RESET), ImVec2(btnW, 0))) {
+        { std::lock_guard<std::mutex> lk(g_setMu); g_set.startMap.clear(); }
+        SettingsSave();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::PopItemWidth();
+    ImGui::EndGroup();
+    ImGui::Dummy(ImVec2(0, pad));
+}
+
+static void DrawPopups()
+{
+    if (g_openConfirmStart) { ImGui::OpenPopup("confirm_start"); g_openConfirmStart = false; }
+    if (g_openSettings) {
+        ImGui::OpenPopup("settings");
+        g_openSettings = false;
+        std::lock_guard<std::mutex> lk(g_setMu);
+        strncpy(serverBuf, g_set.server.c_str(), sizeof(serverBuf) - 1);
+    }
+    if (g_openLinks) { ImGui::OpenPopup("links"); g_openLinks = false; }
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * S, 20 * S));
+    if (ImGui::BeginPopupModal("links", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::PushFont(fBold, 20 * S); ImGui::TextUnformatted(EX_LINKS[L()]); ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0, 4 * S));
+        for (int i = 0; i < 3; i++) {
+            ImGui::PushID(i);
+            if (TextCard("lnk", 420 * S, 70 * S, LINKS[i].title[L()], LINKS[i].url, nullptr, 0, false, false))
+                ShellExecuteA(nullptr, "open", LINKS[i].url, nullptr, nullptr, SW_SHOWNORMAL);
+            ImGui::PopID();
+        }
+        ImGui::Dummy(ImVec2(0, 4 * S));
+        if (ImGui::Button(T(T_CLOSE), ImVec2(420 * S, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("confirm_start", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::PushFont(fBold, 19 * S); ImGui::TextUnformatted(T(T_START_MAP)); ImGui::PopFont();
+        ImGui::TextColored(V(C_YELLOW), "%s", finalCode.c_str());
+        ImGui::PushTextWrapPos(420 * S);
+        ImGui::TextUnformatted(T(T_START_WARN));
+        ImGui::PopTextWrapPos();
+        ImGui::TextUnformatted(EX_CONFIRM[L()]);
+        ImGui::Dummy(ImVec2(0, 4 * S));
+        if (AccentButton(EX_YES[L()], ImVec2(140 * S, 0))) {
+            { std::lock_guard<std::mutex> lk(g_setMu); g_set.startMap = finalCode; }
+            SettingsSave();
+            Flash(T(T_SAVED), C_GREEN);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(EX_NO[L()], ImVec2(140 * S, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar)) {
+        ImGui::PushFont(fBold, 20 * S); ImGui::TextUnformatted(T(T_SETTINGS)); ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0, 4 * S));
+        SectionTitle(T(T_SERVER));
+        ImGui::SetNextItemWidth(320 * S);
+        ImGui::InputText("##server", serverBuf, sizeof(serverBuf), ImGuiInputTextFlags_CharsNoBlank);
+        ImGui::SameLine();
+        if (ImGui::Button(T(T_DEFAULT))) strcpy(serverBuf, "api.loadout.rip");
+        std::string sv = serverBuf;
+        if (ValidServer(sv) != sv) ImGui::TextColored(V(C_YELLOW), "%s", T(T_SERVER_INVALID));
+        ImGui::PushFont(fReg, 14 * S);
+        ImGui::TextColored(V(C_DIM), "%s", T(T_SERVER_HINT));
+        ImGui::PopFont();
+        ImGui::Dummy(ImVec2(0, 6 * S));
+        {
+            bool mute; { std::lock_guard<std::mutex> lk(g_setMu); mute = g_set.muteMinimized; }
+            if (ImGui::Checkbox(EX_MUTE[L()], &mute)) {
+                { std::lock_guard<std::mutex> lk(g_setMu); g_set.muteMinimized = mute; }
+                SettingsSave();
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 6 * S));
+        SectionTitle(T(T_GAME_FOLDER));
+        {
+            int n = WideCharToMultiByte(CP_UTF8, 0, g_exeDir.c_str(), -1, nullptr, 0, nullptr, nullptr);
+            std::string d(n, 0); WideCharToMultiByte(CP_UTF8, 0, g_exeDir.c_str(), -1, &d[0], n, nullptr, nullptr);
+            ImGui::PushTextWrapPos(480 * S);
+            ImGui::TextUnformatted(d.c_str());
+            ImGui::PopTextWrapPos();
+        }
+        ImGui::Dummy(ImVec2(0, 8 * S));
+        if (AccentButton(T(T_SAVE), ImVec2(160 * S, 0))) {
+            bool changed;
+            { std::lock_guard<std::mutex> lk(g_setMu); std::string nv = ValidServer(sv); changed = nv != g_set.server; g_set.server = nv; }
+            SettingsSave();
+            int gs = g_gameState;
+            if (changed && (gs == GS_READY || gs == GS_WAIT_INIT)) Flash(T(T_RESTART_NEEDED), C_YELLOW);
+            else Flash(T(T_SAVED), C_GREEN);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(T(T_CLOSE), ImVec2(160 * S, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
+}
+
+static void DrawHeader(float width, float h)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 o = ImGui::GetWindowPos();
+    dl->AddRectFilled(o, o + ImVec2(width, h), C_PANEL);
+    dl->AddLine(o + ImVec2(0, h - 1), o + ImVec2(width, h - 1), C_LINE, 1);
+    float pad = 20 * S;
+    float ic = 40 * S;
+    ImTextureID icon = TexId("icon");
+    float lh = 54 * S, lw = lh * 1734.0f / 923.0f;
+    if (icon) dl->AddImage(ImTextureRef(icon), o + ImVec2(pad, (h - lh) / 2), o + ImVec2(pad + lw, (h + lh) / 2));
+    ic = lw;
+    dl->AddText(fBold, 20 * S, o + ImVec2(pad + ic + 14 * S, h / 2 - 13 * S), C_TEXT, "LAUNCHER");
+
+    // right side: status, launch button, language, settings
+    ImGuiStyle& st = ImGui::GetStyle();
+    float y = (h - ImGui::GetFrameHeight()) / 2;
+    const char* langs[3] = {"RU", "EN", "ES"};
+    float langW = 46 * S;
+    std::string setLbl = T(T_SETTINGS);
+    float setW = ImGui::CalcTextSize(setLbl.c_str()).x + st.FramePadding.x * 2;
+    float x = width - pad - setW;
+    ImGui::SetCursorPos(ImVec2(x, y));
+    if (ImGui::Button(setLbl.c_str())) g_openSettings = true;
+    float linkW = ImGui::CalcTextSize(EX_LINKS[L()]).x + st.FramePadding.x * 2;
+    x -= 8 * S + linkW;
+    ImGui::SetCursorPos(ImVec2(x, y));
+    if (ImGui::Button(EX_LINKS[L()])) g_openLinks = true;
+    x -= 14 * S + langW * 3 + 4 * S * 2;
+    for (int i = 0; i < 3; i++) {
+        ImGui::SetCursorPos(ImVec2(x + i * (langW + 4 * S), y));
+        bool on = g_set.lang == i;
+        if (on) { ImGui::PushStyleColor(ImGuiCol_Button, V(C_ACCENT)); ImGui::PushStyleColor(ImGuiCol_ButtonHovered, V(C_ACCENT_HOV)); }
+        if (ImGui::Button(langs[i], ImVec2(langW, 0)) && !on) {
+            { std::lock_guard<std::mutex> lk(g_setMu); g_set.lang = i; }
+            SettingsSave();
+        }
+        if (on) ImGui::PopStyleColor(2);
+    }
+    // status
+    int gs = g_gameState;
+    const char* stt = ""; ImU32 dot = C_DIM;
+    switch (gs) {
+    case GS_NOEXE: stt = T(T_GAME_MISSING); dot = C_RED; break;
+    case GS_IDLE: case GS_LAUNCHING: stt = T(T_ST_LAUNCHING); dot = C_YELLOW; break;
+    case GS_WAIT_INIT: stt = T(T_ST_WAITING); dot = C_YELLOW; break;
+    case GS_READY: stt = T(T_ST_READY); dot = C_GREEN; break;
+    case GS_CLOSED: stt = T(T_ST_CLOSED); dot = C_DIM; break;
+    case GS_FAILED: stt = T(T_ST_ERROR); dot = C_RED; break;
+    }
+    bool showLaunch = gs == GS_CLOSED || gs == GS_FAILED;
+    float lx = x - 24 * S;
+    if (showLaunch) {
+        float bw = ImGui::CalcTextSize(T(T_BTN_START)).x + st.FramePadding.x * 2;
+        lx -= bw;
+        ImGui::SetCursorPos(ImVec2(lx, y));
+        if (AccentButton(T(T_BTN_START), ImVec2(bw, 0))) GameRequestLaunch();
+        lx -= 16 * S;
+    }
+    ImVec2 ts = fSemi->CalcTextSizeA(15 * S, FLT_MAX, 0, stt);
+    float sx = lx - ts.x;
+    ImVec2 pill0 = o + ImVec2(sx - 30 * S, h / 2 - ts.y / 2 - 6 * S), pill1 = o + ImVec2(lx + 12 * S, h / 2 + ts.y / 2 + 6 * S);
+    dl->AddRectFilled(pill0, pill1, IM_COL32(32, 35, 41, 255), 30 * S);
+    float pulse = (gs == GS_LAUNCHING || gs == GS_WAIT_INIT || gs == GS_IDLE) ? 0.55f + 0.45f * (float)std::sin(ImGui::GetTime() * 4) : 1.0f;
+    ImVec4 dc = V(dot); dc.w *= pulse;
+    dl->AddCircleFilled(o + ImVec2(sx - 15 * S, h / 2), 5 * S, ImGui::ColorConvertFloat4ToU32(dc));
+    dl->AddText(fSemi, 15 * S, o + ImVec2(sx, h / 2 - ts.y / 2), C_TEXT, stt);
+    if (gs == GS_FAILED) {
+        ImGui::SetCursorScreenPos(pill0);
+        ImGui::InvisibleButton("st_tip", ImVec2(pill1.x - pill0.x, pill1.y - pill0.y));
+        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+            ImGui::PushTextWrapPos(360 * S); ImGui::TextUnformatted(T(T_LAUNCH_FAIL)); ImGui::PopTextWrapPos(); ImGui::EndTooltip();
+        }
+    }
+}
+
+static void DrawUI()
+{
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin("main", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    float W = vp->WorkSize.x, H = vp->WorkSize.y;
+    float headH = 72 * S;
+    DrawHeader(W, headH);
+
+    if (g_gameState == GS_NOEXE) {
+        const char* a = T(T_GAME_MISSING); const char* b = T(T_GAME_MISSING2);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 ta = fBold->CalcTextSizeA(26 * S, FLT_MAX, 0, a), tb = fReg->CalcTextSizeA(17 * S, FLT_MAX, 0, b);
+        dl->AddText(fBold, 26 * S, ImVec2((W - ta.x) / 2, H / 2 - 30 * S), C_TEXT, a);
+        dl->AddText(fReg, 17 * S, ImVec2((W - tb.x) / 2, H / 2 + 10 * S), C_DIM, b);
+        DrawPopups();
+        ImGui::End();
+        return;
+    }
+
+    float rightW = std::floor(390 * S);
+    if (rightW > W * 0.45f) rightW = std::floor(W * 0.45f);
+    float leftW = W - rightW;
+
+    // left: steps + content
+    ImGui::SetCursorPos(ImVec2(0, headH));
+    ImGui::BeginChild("left", ImVec2(leftW, H - headH), 0, ImGuiWindowFlags_NoScrollbar);
+    {
+        float pad = 24 * S;
+        ImGui::SetCursorPos(ImVec2(pad, 16 * S));
+        ImGui::BeginGroup();
+        if (step > 0) {
+            if (ImGui::Button((std::string("< ") + T(T_BACK)).c_str())) {
+                if (step == 2 && selBase >= 0 && BASE_MAPS[selBase].nightPrefix) step = 1; else step = 0;
+            }
+            ImGui::SameLine(0, 16 * S);
+        }
+        DrawSteps();
+        ImGui::EndGroup();
+        ImGui::SetCursorPosX(pad);
+        ImGui::PushFont(fBold, 24 * S);
+        const char* head = step == 0 ? T(T_CHOOSE_MAP) : step == 1 ? T(T_CHOOSE_TIME) : T(T_CHOOSE_MODE);
+        ImGui::TextUnformatted(head);
+        ImGui::PopFont();
+
+        ImGui::SetCursorPosX(pad);
+        ImGui::BeginChild("content", ImVec2(leftW - pad, 0), 0, 0);
+        ImGui::PushClipRect(ImGui::GetWindowPos(), ImGui::GetWindowPos() + ImGui::GetWindowSize(), false);
+        ImGui::SetCursorPos(ImVec2(0, 6 * S));
+        ImGui::BeginGroup();
+        ImGui::PushItemWidth(-1);
+        float innerW = leftW - pad * 2 - ImGui::GetStyle().ScrollbarSize;
+        ImGui::BeginChild("inner", ImVec2(innerW, 0), ImGuiChildFlags_AutoResizeY, 0);
+        if (step == 0 || selBase < 0) DrawMapGrid();
+        else if (step == 1) DrawTimeStep();
+        else DrawModeStep();
+        ImGui::Dummy(ImVec2(0, 10 * S));
+        ImGui::EndChild();
+        ImGui::PopItemWidth();
+        ImGui::EndGroup();
+        ImGui::PopClipRect();
+        ImGui::EndChild();
+    }
+    ImGui::EndChild();
+
+    // right panel
+    ImGui::SetCursorPos(ImVec2(leftW, headH));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, V(C_PANEL));
+    ImGui::BeginChild("right", ImVec2(rightW, H - headH), 0, 0);
+    ImGui::PopStyleColor();
+    {
+        ImVec2 o = ImGui::GetWindowPos();
+        ImGui::GetWindowDrawList()->AddLine(o, o + ImVec2(0, H), C_LINE, 1);
+        DrawRightPanel(rightW - ImGui::GetStyle().ScrollbarSize * 0.5f);
+    }
+    ImGui::EndChild();
+
+    DrawPopups();
+    ImGui::End();
+}
+
+
