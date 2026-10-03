@@ -13,7 +13,8 @@ struct Settings {
     std::string customMap;
     std::string fav[3];
     bool muteMinimized = false;
-    bool uncensored = true;          // Loadout Reloaded "Uncensored patch" (Data\\29911B90.ARC)
+    bool uncensored = true;
+    int launchMode = 0;              // 0: choose first, then "Launch game"; 1: game starts at once with the launcher on top of it          // Loadout Reloaded "Uncensored patch" (Data\\29911B90.ARC)
     bool overlayEnabled = false;
     int overlayMods = 4;  // 1 ctrl, 2 alt, 4 shift
     int overlayVk = VK_TAB;

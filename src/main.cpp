@@ -32,6 +32,7 @@ static IDXGISwapChain* g_swap = nullptr;
 static ID3D11RenderTargetView* g_rtv = nullptr;
 static UINT g_resizeW = 0, g_resizeH = 0;
 static bool g_occluded = false;
+static ULONGLONG g_lastInput = 0;   // last mouse/keyboard event: draw smoothly for a moment after it
 static float g_newS = 0.0f;     // pending DPI change
 static float g_dpiS = 1.0f;     // scale of the monitor; S can be smaller when the window is small
 
@@ -188,6 +189,8 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         UiHotkeyCaptured(mods, vk);
         return 0;
     }
+    if ((msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || (msg >= WM_KEYFIRST && msg <= WM_KEYLAST) || msg == WM_SIZE || msg == WM_ACTIVATE || msg == WM_MOUSELEAVE)
+        g_lastInput = GetTickCount64();
     if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
     switch (msg) {
     case WM_ACTIVATEAPP:
@@ -327,8 +330,13 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
     g_ctx->OMSetRenderTargets(1, &g_rtv, nullptr);
     g_ctx->ClearRenderTargetView(g_rtv, clear);
     g_swap->Present(0, 0);
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
-    UpdateWindow(hwnd);
+    // "straight into the game": no launcher window at all (it stays reachable in the game); never on first run or right after a move
+    {
+        int mode; { std::lock_guard<std::mutex> lk(g_setMu); mode = g_set.launchMode; }
+        g_hiddenStart = mode == 1 && !afterMove && GetFileAttributesW((AppDataDir() + L"\\LoadoutLauncher.test").c_str()) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW(g_gameExe.c_str()) != INVALID_FILE_ATTRIBUTES;
+    }
+    if (!g_hiddenStart) { ShowWindow(hwnd, SW_SHOWDEFAULT); UpdateWindow(hwnd); }
+    else LogF("straight into the game: launcher window stays hidden");
 
     GameInit();
 
@@ -351,6 +359,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
             }
         }
 #endif
+        if (!IsWindowVisible(hwnd)) { Sleep(100); continue; }   // hidden start: nothing to draw
         if (IsIconic(hwnd) || (g_occluded && g_swap->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)) { Sleep(50); continue; }
         g_occluded = false;
         if (g_resizeW && g_resizeH) {
@@ -384,6 +393,9 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int)
 #endif
         HRESULT hr = g_swap->Present(1, 0);
         g_occluded = hr == DXGI_STATUS_OCCLUDED;
+        // nothing moving and nobody touching the window: wait for input instead of redrawing (redraw ~10 times a second)
+        if (!UiAnimating() && GetTickCount64() - g_lastInput > 1000)
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 100, QS_ALLINPUT);
     }
 
     if (IsWindow(hwnd)) ShowWindow(hwnd, SW_HIDE);

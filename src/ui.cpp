@@ -26,6 +26,7 @@
 
 UiHost g_host;
 float S = 1.0f;
+static bool s_anim = false;   // set while something on screen moves
 bool g_uiCaptureHotkey = false;
 static ID3D11Device* s_dev = nullptr;
 static ID3D11DeviceContext* s_ctx = nullptr;
@@ -172,6 +173,19 @@ static const char* T(int id) { return TXT[id][L()]; }
 
 static const char* EX_CONFIRM[3] = {"Продолжить?", "Continue?", "¿Continuar?"};
 static const char* EX_YES[3] = {"Да", "Yes", "Sí"};
+static const char* EX_ONLINE_HINT[3] = {"Для игры по сети ничего выбирать не нужно.", "Nothing needs to be chosen for online play.", "Para jugar en línea no hace falta elegir nada."};
+static const char* EX_TEST_MAP[3] = {"Карта для испытания оружия", "Map for weapon testing", "Mapa para probar armas"};
+static const char* EX_TEST_MAP_SUB[3] = {"необязательно · для одиночной игры", "optional · for single player", "opcional · para un jugador"};
+static const char* EX_NO_TEST_MAP[3] = {"Не выбрана — в тире будет Shooting Gallery", "Not chosen — the range will be Shooting Gallery", "Sin elegir: en el campo de tiro estará Shooting Gallery"};
+static const char* EX_QUICK_T[3] = {"Сразу в игру", "Straight into the game", "Directo al juego"};
+static const char* EX_QUICK_D[3] = {"Со следующего раза игра запустится сама, без этого окна. Лаунчер откроется прямо в игре по %s.",
+                                    "From next time the game starts by itself, without this window. Open the launcher right in the game with %s.",
+                                    "Desde la próxima vez el juego se iniciará solo, sin esta ventana. Abre el lanzador dentro del juego con %s."};
+static void SetLaunchMode(int m)     // "straight into the game" needs the in-game launcher to reach the settings
+{
+    { std::lock_guard<std::mutex> lk(g_setMu); g_set.launchMode = m; if (m == 1) g_set.overlayEnabled = true; }
+    SettingsSave();
+}
 static const char* EX_NO_NIGHT[3] = {"У этой карты нет ночной версии", "This map has no night version", "Este mapa no tiene versión nocturna"};
 static const char* EX_FAV_T[3] = {"Сохранённые карты", "Saved maps", "Mapas guardados"};
 static const char* EX_FAV_D[3] = {"Запомните выбранную карту, чтобы потом включать её одним нажатием.", "Remember the selected map to switch to it later with one click.", "Guarda el mapa elegido para activarlo luego con un clic."};
@@ -449,6 +463,7 @@ static bool ImageCard(const char* id, ImTextureID tex, const char* code, float w
             double t = std::fmod(ImGui::GetTime() + (code[0] % 7) * 0.9, 8.0);
             float a = t < 3.3 ? 0.0f : t < 4.0 ? (float)((t - 3.3) / 0.7) : t < 7.3 ? 1.0f : (float)(1.0 - (t - 7.3) / 0.7);
             a = a * a * (3 - 2 * a);
+            if (a > 0.001f && a < 0.999f) s_anim = true;
             if (a > 0.01f) dl->AddImageRounded(ImTextureRef(tex2), ia, ib, ImVec2(zoom, zoom), ImVec2(1 - zoom, 1 - zoom), IM_COL32(255, 255, 255, (int)(a * 255)), r, ImDrawFlags_RoundCornersTop);
             const char* lbl = a < 0.5f ? TXT[T_DAY][L()] : TXT[T_NIGHT][L()];
             ImVec2 ts = fSemi->CalcTextSizeA(13 * S, FLT_MAX, 0, lbl);
@@ -693,6 +708,47 @@ static void DrawRightPanel(float width)
     float w = width - pad * 2;
     ImGui::PushItemWidth(w);
 
+    // main action: always available, choosing a map is optional
+    int gs = g_host.gameState();
+    bool running = gs == GS_READY || gs == GS_WAIT_INIT || gs == GS_LAUNCHING;
+    ImGui::PushFont(fBold, 19 * S);
+    if (running) {
+        if (AccentButton(T(T_RETURN), ImVec2(w, 54 * S))) {
+            if (SelectionComplete() && g_host.writeMap(finalCode)) Flash(T_SENT, C_GREEN);
+            g_host.returnToGame();
+        }
+    } else if (gs != GS_NOEXE) {
+        if (AccentButton(T(T_BTN_START), ImVec2(w, 54 * S))) g_host.launchGame();
+    }
+    ImGui::PopFont();
+    {   // "straight into the game" switch
+        int mode, m, k; { std::lock_guard<std::mutex> lk(g_setMu); mode = g_set.launchMode; m = g_set.overlayMods; k = g_set.overlayVk; }
+        char desc[400]; snprintf(desc, sizeof(desc), EX_QUICK_D[L()], HotkeyName(m, k).c_str());
+        float tw = w - 96 * S;
+        ImVec2 ds = fReg->CalcTextSizeA(14 * S, FLT_MAX, tw, desc);
+        float ch = 16 * S + 22 * S + ds.y + 14 * S;
+        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        if (ImGui::InvisibleButton("quick", ImVec2(w, ch))) SetLaunchMode(mode ? 0 : 1);
+        bool hov = ImGui::IsItemHovered();
+        if (hov) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        dl->AddRectFilled(p0, p0 + ImVec2(w, ch), hov ? C_CARD_HOV : C_CARD, 10 * S);
+        if (mode) dl->AddRect(p0, p0 + ImVec2(w, ch), C_ACCENT, 10 * S, 0, 2 * S);
+        ImVec2 sw0 = p0 + ImVec2(16 * S, 18 * S), sw1 = sw0 + ImVec2(48 * S, 26 * S);
+        dl->AddRectFilled(sw0, sw1, mode ? C_ACCENT : IM_COL32(60, 65, 75, 255), 13 * S);
+        float kx = mode ? sw1.x - 13 * S : sw0.x + 13 * S;
+        dl->AddCircleFilled(ImVec2(kx, sw0.y + 13 * S), 10 * S, IM_COL32(235, 237, 240, 255));
+        TextAt(dl, fSemi, 17, p0 + ImVec2(80 * S, 14 * S), C_TEXT, EX_QUICK_T[L()]);
+        TextAt(dl, fReg, 14, p0 + ImVec2(80 * S, 38 * S), C_DIM, desc, tw);
+        ImGui::Dummy(ImVec2(0, 2 * S));
+    }
+    ImGui::PushFont(fReg, 14 * S);
+    ImGui::TextColored(V(C_DIM), "%s", EX_ONLINE_HINT[L()]);
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 6 * S));
+    { ImVec2 lp = ImGui::GetCursorScreenPos(); dl->AddLine(lp, ImVec2(lp.x + w, lp.y), C_LINE, 1); }
+    ImGui::Dummy(ImVec2(0, 6 * S));
+    ImGui::PushFont(fBold, 17 * S); ImGui::TextUnformatted(EX_TEST_MAP[L()]); ImGui::PopFont();
+
     // preview
     ImVec2 p = ImGui::GetCursorScreenPos();
     float ph = std::floor(w * 9 / 16);
@@ -704,7 +760,7 @@ static void DrawRightPanel(float width)
     else if (b) DrawPlaceholder(dl, p, p + ImVec2(w, ph), b->code, b->name, 10 * S, 0);
     else {
         dl->AddRectFilled(p, p + ImVec2(w, ph), C_CARD, 10 * S);
-        const char* t = selCustom.empty() ? T(T_CHOOSE_MAP) : selCustom.c_str();
+        const char* t = selCustom.empty() ? EX_NO_TEST_MAP[L()] : selCustom.c_str();
         ImVec2 ts = fSemi->CalcTextSizeA(16 * S, FLT_MAX, 0, t);
         dl->AddText(fSemi, 16 * S, ImVec2(p.x + (w - ts.x) / 2, p.y + (ph - ts.y) / 2), C_DIM, t);
     }
@@ -739,27 +795,6 @@ static void DrawRightPanel(float width)
     }
     ImGui::Dummy(ImVec2(0, 4 * S));
 
-    // main action
-    int gs = g_host.gameState();
-    bool running = gs == GS_READY || gs == GS_WAIT_INIT || gs == GS_LAUNCHING;
-    if (SelectionComplete()) {
-        ImGui::PushFont(fBold, 19 * S);
-        if (running) {
-            if (AccentButton(T(T_RETURN), ImVec2(w, 54 * S))) {
-                if (g_host.writeMap(finalCode)) Flash(T_SENT, C_GREEN);
-                g_host.returnToGame();
-            }
-        } else if (gs != GS_NOEXE) {
-            if (AccentButton(T(T_BTN_START), ImVec2(w, 54 * S))) g_host.launchGame();
-        }
-        ImGui::PopFont();
-    } else {
-        ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
-        ImGui::TextUnformatted(T(T_INCOMPLETE));
-        ImGui::PopTextWrapPos();
-        ImGui::PopStyleColor();
-    }
     if (flashId >= 0 && ImGui::GetTime() < flashUntil) {
         ImGui::PushStyleColor(ImGuiCol_Text, V(flashCol));
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
@@ -767,7 +802,7 @@ static void DrawRightPanel(float width)
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
     }
-    if (SelectionComplete() && running) {
+    if (SelectionComplete()) {
         ImGui::PushFont(fReg, 14 * S);
         ImGui::PushStyleColor(ImGuiCol_Text, V(C_DIM));
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + w);
@@ -1020,6 +1055,25 @@ static void DrawPopups()
         }
 #endif
         ImGui::Dummy(ImVec2(0, 6 * S));
+        {
+            static const char* LM_T[3] = {"Запуск игры", "Starting the game", "Inicio del juego"};
+            static const char* LM_A[3] = {"Сначала выбор", "Choose first", "Elegir primero"};
+            static const char* LM_AD[3] = {"Открывается лаунчер, игра запускается кнопкой «Запустить игру»", "The launcher opens; the game starts with the \"Launch game\" button", "Se abre el lanzador; el juego se inicia con el botón \"Iniciar juego\""};
+            static const char* LM_B[3] = {"Сразу в игру", "Straight into the game", "Directo al juego"};
+            static const char* LM_BD[3] = {"Игра запускается сама, без окна лаунчера. Лаунчер — в игре по сочетанию клавиш", "The game starts by itself, no launcher window. Launcher: in the game via the hotkey", "El juego se inicia solo, sin ventana. El lanzador: dentro del juego con el atajo"};
+            SectionTitle(LM_T[L()]);
+            int mode; { std::lock_guard<std::mutex> lk(g_setMu); mode = g_set.launchMode; }
+            float cw = 300 * S, gap = 12 * S;
+            for (int i = 0; i < 2; i++) {
+                if (i) ImGui::SameLine(0, gap);
+                ImGui::PushID(1000 + i);
+                if (TextCard("lm", cw, 92 * S, i ? LM_B[L()] : LM_A[L()], i ? LM_BD[L()] : LM_AD[L()], nullptr, 0, mode == i, false)) {
+                    SetLaunchMode(i);
+                }
+                ImGui::PopID();
+            }
+        }
+        ImGui::Dummy(ImVec2(0, 6 * S));
         SectionTitle(EX_OVERLAY_T[L()]);
         {
             bool on; int m, k;
@@ -1119,7 +1173,8 @@ static void DrawHeader(float width, float h)
     const char* stt = ""; ImU32 dot = C_DIM;
     switch (gs) {
     case GS_NOEXE: stt = T(T_GAME_MISSING); dot = C_RED; break;
-    case GS_IDLE: case GS_LAUNCHING: stt = T(T_ST_LAUNCHING); dot = C_YELLOW; break;
+    case GS_IDLE: { static const char* NS[3] = {"Игра не запущена", "Game is not running", "El juego no está iniciado"}; stt = NS[L()]; dot = C_DIM; break; }
+    case GS_LAUNCHING: stt = T(T_ST_LAUNCHING); dot = C_YELLOW; break;
     case GS_WAIT_INIT: stt = T(T_ST_WAITING); dot = C_YELLOW; break;
     case GS_READY: stt = T(T_ST_READY); dot = C_GREEN; break;
     case GS_CLOSED: stt = T(T_ST_CLOSED); dot = C_DIM; break;
@@ -1138,7 +1193,8 @@ static void DrawHeader(float width, float h)
     float sx = lx - ts.x;
     ImVec2 pill0 = o + ImVec2(sx - 30 * S, h / 2 - ts.y / 2 - 6 * S), pill1 = o + ImVec2(lx + 12 * S, h / 2 + ts.y / 2 + 6 * S);
     dl->AddRectFilled(pill0, pill1, IM_COL32(32, 35, 41, 255), 30 * S);
-    float pulse = (gs == GS_LAUNCHING || gs == GS_WAIT_INIT || gs == GS_IDLE) ? 0.55f + 0.45f * (float)std::sin(ImGui::GetTime() * 4) : 1.0f;
+    if (gs == GS_LAUNCHING || gs == GS_WAIT_INIT) s_anim = true;
+    float pulse = (gs == GS_LAUNCHING || gs == GS_WAIT_INIT) ? 0.55f + 0.45f * (float)std::sin(ImGui::GetTime() * 4) : 1.0f;
     ImVec4 dc = V(dot); dc.w *= pulse;
     dl->AddCircleFilled(o + ImVec2(sx - 15 * S, h / 2), 5 * S, ImGui::ColorConvertFloat4ToU32(dc));
     dl->AddText(fSemi, 15 * S, o + ImVec2(sx, h / 2 - ts.y / 2), C_TEXT, stt);
@@ -1191,6 +1247,7 @@ static std::string GB(uint64_t b) { char t[32]; snprintf(t, sizeof(t), "%.2f", b
 
 static void ProgressBar(float frac, ImVec2 size)
 {
+    s_anim = true;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
     dl->AddRectFilled(p, p + size, C_CARD, size.y / 2);
@@ -1323,9 +1380,16 @@ static void DrawUIInner(ImVec2 pos, ImVec2 size)
         ImGui::EndGroup();
         ImGui::SetCursorPosX(pad);
         ImGui::PushFont(fBold, 24 * S);
-        const char* head = step == 0 ? T(T_CHOOSE_MAP) : step == 1 ? T(T_CHOOSE_TIME) : T(T_CHOOSE_MODE);
+        const char* head = step == 0 ? EX_TEST_MAP[L()] : step == 1 ? T(T_CHOOSE_TIME) : T(T_CHOOSE_MODE);
         ImGui::TextUnformatted(head);
         ImGui::PopFont();
+        if (step == 0) {
+            ImGui::SameLine(0, 14 * S);
+            ImGui::PushFont(fReg, 15 * S);
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 7 * S);
+            ImGui::TextColored(V(C_DIM), "%s", EX_TEST_MAP_SUB[L()]);
+            ImGui::PopFont();
+        }
 
         ImGui::SetCursorPosX(pad);
         ImGui::BeginChild("content", ImVec2(leftW - pad, 0), 0, 0);
@@ -1399,8 +1463,11 @@ void UiOnOpen()
     }
 }
 
+bool UiAnimating() { return s_anim; }
+
 void UiDraw()
 {
+    s_anim = false;
     ImGuiViewport* vp = ImGui::GetMainViewport();
     if (!g_host.overlay) { DrawUIInner(vp->WorkPos, vp->WorkSize); return; }
     // in-game: dim the game and show the launcher in the middle

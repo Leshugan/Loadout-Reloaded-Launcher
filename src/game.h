@@ -17,8 +17,8 @@ void LogInit();
 
 void GameInit();                         // detect exe, start worker thread
 int GameApplyPatch();                   // uncensored patch on/off by settings: 0 done, 1 later (game running), 2 error
+extern std::atomic<bool> g_hiddenStart;     // launcher window was never shown ("straight into the game")
 void GameRequestLaunch();                // start game via SSE (async)
-void GameSetPendingMap(const std::string& code); // map to write into game memory
 bool GameWriteMapNow(const std::string& code);   // synchronous write if ready
 void GameReturnToGame();                 // restore and focus game window
 void GameShutdown();

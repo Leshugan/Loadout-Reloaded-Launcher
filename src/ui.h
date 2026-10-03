@@ -21,6 +21,7 @@ extern bool g_uiCaptureHotkey;  // settings dialog waits for a key combination
 void UiInit(ID3D11Device* dev, ID3D11DeviceContext* ctx, HMODULE resModule, float scale);
 void UiSetScale(float scale);   // rebuilds style
 void UiDraw();
+bool UiAnimating();                 // something on screen is moving (fade, pulse, progress) and needs smooth frames
 void UiHotkeyCaptured(int mods, int vk);
 void UiOnOpen();                // overlay opened: refresh state
 std::string FetchMediafireDirect(const char* pageUrl);  // fresh direct link from a MediaFire page (empty on failure)

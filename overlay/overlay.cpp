@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstring>
-#include <tlhelp32.h>
 #include "MinHook.h"
 #include "imgui.h"
 #include "imgui_impl_win32.h"
@@ -353,15 +352,12 @@ static bool InstallHooks()
 static DWORD WINAPI MainThread(LPVOID)
 {
     Sleep(2000);
-#ifdef LL_TESTHOOK
-    Sleep(10000);
-    { HANDLE sn = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
-      MODULEENTRY32W me{}; me.dwSize = sizeof(me);
-      for (BOOL ok = Module32FirstW(sn, &me); ok; ok = Module32NextW(sn, &me)) Log("MOD %ls", me.szExePath);
-      CloseHandle(sn); }
-#endif
+    FILETIME lastWrite{};
     while (true) {
-        SettingsLoad();
+        WIN32_FILE_ATTRIBUTE_DATA fa{};
+        bool changed = !GetFileAttributesExW(g_iniPath.c_str(), GetFileExInfoStandard, &fa) ||
+                       CompareFileTime(&fa.ftLastWriteTime, &lastWrite) != 0;
+        if (changed) { lastWrite = fa.ftLastWriteTime; SettingsLoad(); }
         { std::lock_guard<std::mutex> lk(g_setMu); g_enabled = g_set.overlayEnabled; g_mods = g_set.overlayMods; g_vk = g_set.overlayVk; }
         if (g_enabled && !g_hooked) { g_hooked = true; if (!InstallHooks()) Log("overlay unavailable"); }
 #ifdef LL_TESTHOOK
@@ -387,24 +383,6 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID)
         g_iniPath = g_gameDir + L"\\LoadoutLauncher_Data\\LoadoutLauncher.ini";
         g_log = _wfopen((AppDataDir() + L"\\LoadoutOverlay.log").c_str(), L"w");
         Log("overlay loaded into %ls", exe);
-#ifdef LL_TESTHOOK
-        if (wchar_t* env = GetEnvironmentStringsW()) {
-            for (wchar_t* p = env; *p; p += wcslen(p) + 1) Log("ENV %ls", p);
-            FreeEnvironmentStringsW(env);
-        }
-        Log("CMD %ls", GetCommandLineW());
-        HKEY k;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Valve\\Steam\\ActiveProcess", 0, KEY_READ, &k) == 0) {
-            DWORD pid = 0, sz = 4; RegQueryValueExW(k, L"pid", nullptr, nullptr, (BYTE*)&pid, &sz);
-            wchar_t b[600] = {}; sz = sizeof(b) - 2; RegQueryValueExW(k, L"SteamClientDll", nullptr, nullptr, (BYTE*)b, &sz);
-            wchar_t b2[600] = {}; sz = sizeof(b2) - 2; RegQueryValueExW(k, L"SteamClientDll64", nullptr, nullptr, (BYTE*)b2, &sz);
-            Log("REG pid=%lu dll=%ls dll64=%ls", pid, b, b2); RegCloseKey(k);
-        }
-        DWORD ppid = 0; HANDLE sn = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        PROCESSENTRY32W pe{}; pe.dwSize = sizeof(pe);
-        for (BOOL ok = Process32FirstW(sn, &pe); ok; ok = Process32NextW(sn, &pe)) if (pe.th32ProcessID == GetCurrentProcessId()) ppid = pe.th32ParentProcessID;
-        CloseHandle(sn); Log("PARENT %lu", ppid);
-#endif
         CreateThread(nullptr, 0, MainThread, nullptr, 0, nullptr);
     }
     return TRUE;

@@ -69,6 +69,7 @@ void SettingsLoad()
     g_set.fav[2] = IniGet(L"Favorite3", "");
     g_set.muteMinimized = IniGet(L"MuteWhenMinimized", "0") == "1";
     g_set.uncensored = IniGet(L"UncensoredPatch", "1") == "1";
+    g_set.launchMode = IniGet(L"LaunchMode", "0") == "1" ? 1 : 0;
     g_set.overlayEnabled = IniGet(L"OverlayEnabled", "0") == "1";
     g_set.overlayMods = atoi(IniGet(L"OverlayMods", "4").c_str());
     g_set.overlayVk = atoi(IniGet(L"OverlayKey", "9").c_str());
@@ -94,6 +95,7 @@ void SettingsSave()
     IniPut(L"Favorite3", g_set.fav[2]);
     IniPut(L"MuteWhenMinimized", g_set.muteMinimized ? "1" : "0");
     IniPut(L"UncensoredPatch", g_set.uncensored ? "1" : "0");
+    IniPut(L"LaunchMode", g_set.launchMode ? "1" : "0");
     IniPut(L"OverlayEnabled", g_set.overlayEnabled ? "1" : "0");
     IniPut(L"OverlayMods", std::to_string(g_set.overlayMods));
     IniPut(L"OverlayKey", std::to_string(g_set.overlayVk));
