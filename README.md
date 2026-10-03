@@ -18,8 +18,8 @@
 
 
 <p align="center">
-  <img src="docs/ru_maps.jpg" alt="Главный экран" width="49%">
-  <img src="docs/ru_settings.jpg" alt="Настройки" width="49%">
+  <img src="docs/ru_maps_1001.jpg" alt="Главный экран" width="49%">
+  <img src="docs/ru_settings_1001.jpg" alt="Настройки" width="49%">
 </p>
 
 **Лицензия:** делайте с исходным кодом что хотите — форки, моды и всё остальное. Единственное условие — указывайте меня как автора.

@@ -18,8 +18,8 @@ If you haven't downloaded the game yet or haven't visited the project page, you 
 
 
 <p align="center">
-  <img src="docs/en_maps.jpg" alt="Main screen" width="49%">
-  <img src="docs/en_settings.jpg" alt="Settings" width="49%">
+  <img src="docs/en_maps_1001.jpg" alt="Main screen" width="49%">
+  <img src="docs/en_settings_1001.jpg" alt="Settings" width="49%">
 </p>
 
 **License:** do whatever you want with the source code — forks, mods, anything. The only condition is to credit me as the author.

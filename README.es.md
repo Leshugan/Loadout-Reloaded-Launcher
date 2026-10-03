@@ -18,8 +18,8 @@ Si todavía no has descargado el juego ni has visitado la página del proyecto, 
 
 
 <p align="center">
-  <img src="docs/es_maps.jpg" alt="Pantalla principal" width="49%">
-  <img src="docs/es_settings.jpg" alt="Ajustes" width="49%">
+  <img src="docs/es_maps_1001.jpg" alt="Pantalla principal" width="49%">
+  <img src="docs/es_settings_1001.jpg" alt="Ajustes" width="49%">
 </p>
 
 **Licencia:** haz lo que quieras con el código fuente: forks, mods, lo que sea. La única condición es mencionarme como autor.
